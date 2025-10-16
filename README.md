@@ -28,14 +28,14 @@ This tool leverages read-only integrations with Azure APIs and Azure Monitor. Ou
 
 Before running the script, ensure your Azure user account has the following roles assigned:
 
-- **Reader Role** - Access to view Azure resources
-- **Billing Reader Role** - Access to billing and cost data
-- **Monitoring Reader Role** - Access to Azure Monitor metrics
-- **Cost Management Reader Role** - Access to cost management data
+- **✅ Reader Role** - Access to view Azure resources
+- **✅ Billing Reader Role** - Access to billing and cost data
+- **✅ Monitoring Reader Role** - Access to Azure Monitor metrics
+- **✅ Cost Management Reader Role** - Access to cost management data
 
 ### Environment Options
 
-#### Option 1: Azure Cloud Shell (Recommended)
+#### 🚀 Quick Start | Option 1: Azure Cloud Shell (Recommended) ⭐
 - No additional setup required
 - Pre-authenticated environment
 - All dependencies included
