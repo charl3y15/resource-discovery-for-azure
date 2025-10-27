@@ -595,7 +595,7 @@ function ExecuteInventoryProcessing()
         }
 
         $Resource = $Resources | Select-Object -First $Resources.count
-        $Resource = ($Resource | ConvertTo-Json -Depth 50)
+        #$Resource = ($Resource | ConvertTo-Json -Depth 50)
 
         foreach ($Module in $Modules) 
         {
@@ -603,7 +603,7 @@ function ExecuteInventoryProcessing()
             
             Write-Log -Message ("Service Processing: {0}" -f $ModName) -Severity 'Success'
 
-            $result = & $Module -SCPath $SCPath -Sub $Subscriptions -Resources ($Resource | ConvertFrom-Json) -Task "Processing" -File $file -SmaResources $null -TableStyle $null -Metrics $Global:AzMetrics
+            $result = & $Module -SCPath $SCPath -Sub $Subscriptions -Resources $Resource -Task "Processing" -File $file -SmaResources $null -TableStyle $null -Metrics $Global:AzMetrics
             $Global:SmaResources | Add-Member -MemberType NoteProperty -Name $ModName -Value NotSet
             $Global:SmaResources.$ModName = $result
 
