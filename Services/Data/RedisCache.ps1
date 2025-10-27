@@ -10,27 +10,41 @@ if ($Task -eq 'Processing')
     {
         $tmp = @()
 
-        foreach ($1 in $RedisCache) {
-            $sub1 = $SUB | Where-Object { $_.id -eq $1.subscriptionId }
-            $data = $1.PROPERTIES
+        foreach ($redisCacheInstance in $RedisCache) 
+        {
+            $subscription = $Sub | Where-Object { $_.id -eq $redisCacheInstance.subscriptionId }
+            $data = $redisCacheInstance.Properties
             
-            $obj = @{
-                'ID'                    = $1.id;
-                'Subscription'          = $sub1.Name;
-                'ResourceGroup'         = $1.RESOURCEGROUP;
-                'Name'                  = $1.NAME;
-                'Location'              = $1.LOCATION;
-                'Version'               = $data.redisVersion;
-                'Sku'                   = $data.sku.name;
-                'Capacity'              = $data.sku.capacity;
-                'Family'                = $data.sku.family;
-                'ShardCount'            = $data.shardCount;
-                'ReplicasPerMaster'     = $data.replicasPerMaster;
-                'ReplicasPerPrimary'    = $data.replicasPerPrimary;
-                'MaxClients'            = $data.redisConfiguration.'maxclients';
+            if($redisCacheInstance.Type -eq 'microsoft.cache/redis')
+            {
+                $obj = @{
+                    'ID'                    = $redisCacheInstance.id;
+                    'Subscription'          = $subscription.Name;
+                    'ResourceGroup'         = $redisCacheInstance.ResourceGroup;
+                    'Name'                  = $redisCacheInstance.Name;
+                    'Location'              = $redisCacheInstance.Location;
+                    'Sku'                   = $data.sku.name;
+                    'Capacity'              = $data.sku.capacity;
+                    'Family'                = $data.sku.family;
+                }
+
+                $tmp += $obj
             }
-            
-            $tmp += $obj
+            else
+            {
+                $obj = @{
+                    'ID'                    = $redisCacheInstance.id;
+                    'Subscription'          = $subscription.Name;
+                    'ResourceGroup'         = $redisCacheInstance.ResourceGroup;
+                    'Name'                  = $redisCacheInstance.Name;
+                    'Location'              = $redisCacheInstance.Location;
+                    'Sku'                   = $redisCacheInstance.sku.name;
+                    'Capacity'              = $redisCacheInstance.sku.capacity;
+                    'Family'                = 'enterprise';
+                }
+
+                $tmp += $obj
+            }
         }
 
         $tmp
@@ -50,14 +64,9 @@ else
         $Exc.Add('ResourceGroup')
         $Exc.Add('Name')                    
         $Exc.Add('Location')           
-        $Exc.Add('Version')                               
         $Exc.Add('Sku')                     
         $Exc.Add('Capacity')
         $Exc.Add('Family')       
-        $Exc.Add('ShardCount')  
-        $Exc.Add('ReplicasPerMaster')  
-        $Exc.Add('ReplicasPerPrimary')  
-        $Exc.Add('MaxClients')
 
         $ExcelVar = $SmaResources.RedisCache
 
