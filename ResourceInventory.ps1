@@ -278,6 +278,9 @@ Function RunInventorySetup()
     
     function ResourceInventoryLoop()
     {
+        # #region agent log
+        $dbgLog = 'c:\GitHub\resource-discovery-for-azure\.cursor\debug.log'; $branch = 'none'; if (![string]::IsNullOrEmpty($ResourceGroup) -and ![string]::IsNullOrEmpty($SubscriptionID)) { $branch = 'ResourceGroupAndSub' } elseif ([string]::IsNullOrEmpty($ResourceGroup) -and ![string]::IsNullOrEmpty($SubscriptionID)) { $branch = 'SubOnly' } else { $branch = 'elseFullTenant' }; [System.IO.File]::AppendAllText($dbgLog, ((@{timestamp=[long](((Get-Date)-(Get-Date '1/1/1970')).TotalMilliseconds);location='ResourceInventory.ps1:ResourceInventoryLoop';message='ResourceInventoryLoop entry';data=@{branch=$branch};sessionId='debug-session';hypothesisId='H3'}|ConvertTo-Json -Compress)+"`n"))
+        # #endregion
         if(![string]::IsNullOrEmpty($ResourceGroup) -and [string]::IsNullOrEmpty($SubscriptionID))
         {
             Write-Log -Message ("Resource Group Name present, but missing Subscription ID.") -Severity 'Error'
@@ -345,7 +348,23 @@ Function RunInventorySetup()
         else 
         {
             $GraphQuery = "resources | where strlen(properties.definition.actions) < 123000 | summarize count()"
-            $EnvSize = az graph query -q  $GraphQuery --output json --only-show-errors | ConvertFrom-Json
+            $subIds = @($Subscriptions | ForEach-Object { $_.id })
+            # #region agent log
+            $dbgLog = 'c:\GitHub\resource-discovery-for-azure\.cursor\debug.log'; [System.IO.File]::AppendAllText($dbgLog, ((@{timestamp=[long](((Get-Date)-(Get-Date '1/1/1970')).TotalMilliseconds);location='ResourceInventory.ps1:beforeAzGraph';message='before az graph query';data=@{subCount=$subIds.Count};sessionId='debug-session';hypothesisId='H1'}|ConvertTo-Json -Compress)+"`n"))
+            # #endregion
+            $azJob = Start-Job -ScriptBlock { param($q, $subs) az graph query -q $q --subscriptions $subs --output json --only-show-errors } -ArgumentList $GraphQuery, $subIds
+            $completed = Wait-Job $azJob -Timeout 90
+            if (-not $completed) {
+                Stop-Job $azJob -ErrorAction SilentlyContinue; Remove-Job $azJob -Force -ErrorAction SilentlyContinue
+                Write-Log -Message 'az graph query timed out (90s). Ensure resource-graph extension is installed: az extension add --name resource-graph' -Severity 'Error'
+                Exit
+            }
+            $rawOut = Receive-Job $azJob; Remove-Job $azJob -Force -ErrorAction SilentlyContinue
+            if ($rawOut -is [array]) { $rawOut = $rawOut -join "`n" }
+            $EnvSize = $rawOut | ConvertFrom-Json
+            # #region agent log
+            $dbgLog = 'c:\GitHub\resource-discovery-for-azure\.cursor\debug.log'; $countVal = $null; try { $countVal = $EnvSize.Data.'count_' } catch {}; [System.IO.File]::AppendAllText($dbgLog, ((@{timestamp=[long](((Get-Date)-(Get-Date '1/1/1970')).TotalMilliseconds);location='ResourceInventory.ps1:afterAzGraph';message='after az graph query';data=@{EnvSizeCount=$countVal;EnvSizeNull=($null -eq $EnvSize)};sessionId='debug-session';hypothesisId='H2';hypothesisId2='H5'}|ConvertTo-Json -Compress)+"`n"))
+            # #endregion
             $EnvSizeCount = $EnvSize.Data.'count_'
             
             Write-Log -Message ("Resources Output: {0} Resources Identified" -f $EnvSizeCount) -Severity 'Success'
@@ -360,7 +379,7 @@ Function RunInventorySetup()
                 while ($Looper -lt $Loop) 
                 {
                     $GraphQuery = "resources | where strlen(properties.definition.actions) < 123000 | project id,name,type,tenantId,kind,location,resourceGroup,subscriptionId,managedBy,sku,plan,properties,identity,zones,extendedLocation,tags | order by id asc"
-                    $Resource = (az graph query -q $GraphQuery --skip $Limit --first 1000 --output json --only-show-errors).tolower() | ConvertFrom-Json
+                    $Resource = (az graph query -q $GraphQuery --subscriptions $subIds --skip $Limit --first 1000 --output json --only-show-errors).tolower() | ConvertFrom-Json
                     
                     $Global:Resources += $Resource.Data
                     Start-Sleep 2
@@ -372,7 +391,10 @@ Function RunInventorySetup()
     }
     
     function ResourceInventoryAvd()
-    {    
+    {
+        # #region agent log
+        $dbgLog = 'c:\GitHub\resource-discovery-for-azure\.cursor\debug.log'; [System.IO.File]::AppendAllText($dbgLog, ((@{timestamp=[long](((Get-Date)-(Get-Date '1/1/1970')).TotalMilliseconds);location='ResourceInventory.ps1:ResourceInventoryAvd';message='ResourceInventoryAvd entry';data=@{};sessionId='debug-session';hypothesisId='H4'}|ConvertTo-Json -Compress)+"`n"))
+        # #endregion
         $AVDSize = az graph query -q "desktopvirtualizationresources | summarize count()" --output json --only-show-errors | ConvertFrom-Json
         $AVDSizeCount = $AVDSize.data.'count_'
     
@@ -401,6 +423,9 @@ Function RunInventorySetup()
     CheckVersion
     CheckPowerShell
     GetSubscriptionsData
+    # #region agent log
+    $dbgLog = 'c:\GitHub\resource-discovery-for-azure\.cursor\debug.log'; [System.IO.File]::AppendAllText($dbgLog, ((@{timestamp=[long](((Get-Date)-(Get-Date '1/1/1970')).TotalMilliseconds);location='ResourceInventory.ps1:RunInventorySetup';message='after GetSubscriptionsData before ResourceInventoryLoop';data=@{};sessionId='debug-session';hypothesisId='H3'}|ConvertTo-Json -Compress)+"`n"))
+    # #endregion
     ResourceInventoryLoop
     ResourceInventoryAvd
 }
