@@ -9,11 +9,13 @@ If ($Task -eq 'Processing')
 
     foreach($location in ($virtualMachines | Select-Object -ExpandProperty location -Unique))
     {
-        foreach ($vmsize in ( az vm list-sizes -l $location | ConvertFrom-Json))
-        {
-            $vmsizemap[$vmsize.name] = @{
-                CPU = $vmSize.numberOfCores
-                RAM = [math]::Max($vmSize.memoryInMB / 1024, 0) 
+        $skus = az vm list-skus --location $location --resource-type virtualMachines --output json --only-show-errors 2>$null | ConvertFrom-Json
+        foreach ($sku in $skus) {
+            $caps = @{}
+            foreach ($c in $sku.capabilities) { $n = $c.name ?? $c.Name; $v = $c.value ?? $c.Value; $caps[$n] = $v }
+            $vmsizemap[$sku.name] = @{
+                CPU = if ($caps['vCPUs']) { [int]$caps['vCPUs'] } else { 0 }
+                RAM = if ($caps['MemoryGB']) { [math]::Max([double]$caps['MemoryGB'], 0) } else { 0 }
             }
         }
     }
