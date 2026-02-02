@@ -186,30 +186,43 @@ Function RunInventorySetup()
 
             $DebugPreference = "Continue"
     
-            $Tenants = az account list --query [].homeTenantId -o tsv --only-show-errors | Sort-Object -Unique
+            $Tenants = @(az account list --query [].homeTenantId -o tsv --only-show-errors 2>$null | Sort-Object -Unique)
 
             Write-Log -Message ('Checking number of Tenants') -Severity 'Info'
+
+            if ($Tenants.Count -eq 0 -or [string]::IsNullOrWhiteSpace($Tenants[0]))
+            {
+                Write-Log -Message ('Login failed or no accounts. Run: az logout then az login') -Severity 'Error'
+                Exit
+            }
     
             if ($Tenants.Count -eq 1) 
             {
                 Write-Log -Message ('You have privileges only in One Tenant') -Severity 'Success'
-                $TenantID = $Tenants
+                $TenantID = if ($Tenants -is [array]) { $Tenants[0] } else { $Tenants }
             }
             else 
             {
                 Write-Log -Message ('Select the the Azure Tenant ID that you want to connect: ') -Severity 'Warning'
     
                 $SequenceID = 1
-                foreach ($TenantID in $Tenants) 
+                foreach ($t in $Tenants) 
                 {
-                    write-host "$SequenceID)  $TenantID"
+                    write-host "$SequenceID)  $t"
                     $SequenceID ++
                 }
     
-                [int]$SelectTenant = read-host "Select Tenant (Default 1)"
-                $defaultTenant = --$SelectTenant
+                $inputTenant = read-host "Select Tenant (Default 1)"
+                [int]$SelectTenant = if ([string]::IsNullOrWhiteSpace($inputTenant)) { 1 } else { $inputTenant }
+                if ($SelectTenant -lt 1) { $SelectTenant = 1 }
+                $defaultTenant = [Math]::Min($SelectTenant - 1, $Tenants.Count - 1)
                 $TenantID = $Tenants[$defaultTenant]
     
+                if ([string]::IsNullOrWhiteSpace($TenantID))
+                {
+                    Write-Log -Message ('No tenant selected. Run: az logout then az login') -Severity 'Error'
+                    Exit
+                }
                 if($DeviceLogin.IsPresent)
                 {
                     az login --use-device-code -t $TenantID
@@ -469,7 +482,7 @@ function ExecuteInventoryProcessing()
             
             $Global:AzMetrics = New-Object PSObject
             $Global:AzMetrics | Add-Member -MemberType NoteProperty -Name Metrics -Value NotSet
-            $Global:AzMetrics.Metrics = & $MetricPath -Subscriptions $Subscriptions -Resources $Resources -Task "Processing" -File $file -Metrics $null -TableStyle $null -ConcurrencyLimit $ConcurrencyLimit -FilePath $metricsFilePath
+            $Global:AzMetrics.Metrics = & $MetricPath -Subscriptions $Global:Subscriptions -Resources $Global:Resources -Task "Processing" -File $Global:File -Metrics $null -TableStyle $null -ConcurrencyLimit $ConcurrencyLimit -FilePath $metricsFilePath
         }
     }
 
@@ -544,7 +557,7 @@ function ExecuteInventoryProcessing()
             $Modules = Get-ChildItem -Path ($PSScriptRoot +  '/Services/*.ps1') -Recurse
         }
 
-        $Resource = $Resources | Select-Object -First $Resources.count
+        $Resource = $Global:Resources | Select-Object -First $Global:Resources.Count
         #$Resource = ($Resource | ConvertTo-Json -Depth 50)
 
         foreach ($Module in $Modules) 
@@ -553,7 +566,7 @@ function ExecuteInventoryProcessing()
             
             Write-Log -Message ("Service Processing: {0}" -f $ModName) -Severity 'Success'
 
-            $result = & $Module -SCPath $SCPath -Sub $Subscriptions -Resources $Resource -Task "Processing" -File $file -SmaResources $null -TableStyle $null -Metrics $Global:AzMetrics
+            $result = & $Module -SCPath $SCPath -Sub $Global:Subscriptions -Resources $Resource -Task "Processing" -File $Global:File -SmaResources $null -TableStyle $null -Metrics $Global:AzMetrics
             $Global:SmaResources | Add-Member -MemberType NoteProperty -Name $ModName -Value NotSet
             $Global:SmaResources.$ModName = $result
 
@@ -566,9 +579,20 @@ function ExecuteInventoryProcessing()
     {
         Write-Log -Message ("Starting Reporting Phase.") -Severity 'Info'
 
+        if (-not (Get-Command Export-Excel -ErrorAction SilentlyContinue)) {
+            Write-Log -Message ('ImportExcel module required for Excel report. Install: Install-Module -Name ImportExcel -Scope CurrentUser') -Severity 'Error'
+            return
+        }
+
+        $excelPath = $Global:File
+        if ([string]::IsNullOrWhiteSpace($excelPath)) {
+            $excelPath = $DefaultPath + $Global:ReportName + "_" + $CurrentDateTime + ".xlsx"
+            $Global:File = $excelPath
+        }
+
         # Ensure the Excel file exists so services and Summary can write to it (avoids missing file when no service has data)
-        if (-not (Test-Path -Path $file -PathType Leaf)) {
-            "" | Export-Excel -Path $file -WorksheetName 'Overview' -ErrorAction SilentlyContinue
+        if (-not (Test-Path -Path $excelPath -PathType Leaf)) {
+            "" | Export-Excel -Path $excelPath -WorksheetName 'Overview' -ErrorAction Stop
         }
 
         $Services = @()
@@ -592,7 +616,11 @@ function ExecuteInventoryProcessing()
             $c = [math]::Round($c)
             
             Write-Log -Message ("Running Services: $Service") -Severity 'Info'
-            $ProcessResults = & $Service.FullName -SCPath $PSScriptRoot -Sub $null -Resources $null -Task "Reporting" -File $file -SmaResources $Global:SmaResources -TableStyle $Global:TableStyle -Metrics $null
+            try {
+                $ProcessResults = & $Service.FullName -SCPath $PSScriptRoot -Sub $null -Resources $null -Task "Reporting" -File $excelPath -SmaResources $Global:SmaResources -TableStyle $Global:TableStyle -Metrics $null
+            } catch {
+                Write-Log -Message ("Service failed (skipping): $($Service.Name) - $_") -Severity 'Warning'
+            }
 
             $ReportCounter++
         }
@@ -617,6 +645,8 @@ function ExecuteInventoryProcessing()
         $reportedStartTime = (Get-Date).AddDays(-31).Date.AddHours(0).AddMinutes(0).AddSeconds(0).DateTime
         $reportedEndTime = (Get-Date).AddDays(-1).Date.AddHours(0).AddMinutes(0).AddSeconds(0).DateTime
 
+        $Global:ConsumptionRows = [System.Collections.ArrayList]::new()
+
         foreach($sub in $Global:Subscriptions)
         {
             # Check if SubscriptionId is not null, not empty, and matches $sub.id
@@ -637,6 +667,7 @@ function ExecuteInventoryProcessing()
             Set-AzContext -Subscription $sub.id | Out-Null
             Write-Log -Message ("Gathering Consumption for: {0}" -f $sub.Name) -Severity 'Info'
 
+            $usageData = $null
             do 
             {    
                 $params = @{
@@ -645,8 +676,10 @@ function ExecuteInventoryProcessing()
                     AggregationGranularity = 'Daily'
                     ShowDetails            = $true
                 }
-    
-                $params.ContinuationToken = $usageData.ContinuationToken
+                if ($null -ne $usageData -and $usageData.PSObject.Properties['ContinuationToken'] -and $usageData.ContinuationToken)
+                {
+                    $params.ContinuationToken = $usageData.ContinuationToken
+                }
     
                 $usageData = Get-UsageAggregates @params
                 $usageDataExport = $usageData.UsageAggregations.Properties | Select-Object InstanceData, MeterCategory, MeterId, MeterName, MeterRegion, MeterSubCategory, Quantity, Unit, UsageStartTime, UsageEndTime
@@ -703,11 +736,17 @@ function ExecuteInventoryProcessing()
                     $newUsageDataExport.Add($usageDataExport[$item]) | Out-Null
                 }
 
-                #$newUsageDataExport | Export-Csv $Global:ConsumptionFileCsv -Encoding utf-8 -Append
+                $batchRows = $newUsageDataExport | Select-Object InstanceData, MeterCategory, MeterId, MeterName, MeterRegion, MeterSubCategory, Quantity, Unit, UsageStartTime, UsageEndTime, ResourceId, ResourceLocation, ConsumptionMeter, ReservationId, ReservationOrderId
+                foreach ($r in $batchRows) { $Global:ConsumptionRows.Add($r) | Out-Null }
 
-                $newUsageDataExport | Select-Object InstanceData, MeterCategory, MeterId, MeterName, MeterRegion, MeterSubCategory, Quantity, Unit, UsageStartTime, UsageEndTime, ResourceId, ResourceLocation, ConsumptionMeter, ReservationId, ReservationOrderId | Export-Csv $Global:ConsumptionFileCsv -Encoding utf8 -Append -NoTypeInformation
+                $batchRows | Export-Csv $Global:ConsumptionFileCsv -Encoding utf8 -Append -NoTypeInformation
                 
-            } while ('ContinuationToken' -in $usageData.psobject.properties.name -and $usageData.ContinuationToken)
+            } while ($null -ne $usageData -and 'ContinuationToken' -in $usageData.psobject.properties.name -and $usageData.ContinuationToken)
+        }
+
+        if ($Global:ConsumptionRows.Count -gt 0 -and (Test-Path -Path $Global:File -PathType Leaf)) {
+            Write-Log -Message ('Writing Consumption to Excel: {0} rows' -f $Global:ConsumptionRows.Count) -Severity 'Info'
+            $Global:ConsumptionRows | Export-Excel -Path $Global:File -WorksheetName 'Consumption' -AutoSize -MaxAutoSizeRows 500 -TableStyle $Global:TableStyle
         }
 
         $DebugPreference = "Continue"
@@ -742,7 +781,7 @@ function FinalizeOutputs
             $SummaryPath = Get-ChildItem -Path ($PSScriptRoot + '/Extension/Summary.ps1') -Recurse
         }
 
-        $ChartsRun = & $SummaryPath -File $file -TableStyle $TableStyle -PlatOS $PlatformOS -Subscriptions $Subscriptions -Resources $Resources -ExtractionRunTime $Runtime -ReportingRunTime $ReportingRunTime -RunLite $false -Version $Global:Version
+        $ChartsRun = & $SummaryPath -File $Global:File -TableStyle $TableStyle -PlatOS $PlatformOS -Subscriptions $Global:Subscriptions -Resources $Global:Resources -ExtractionRunTime $Runtime -ReportingRunTime $ReportingRunTime -RunLite $false -Version $Global:Version
     }
 
     ProcessSummary

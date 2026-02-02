@@ -57,9 +57,9 @@ else
         $Exc.Add('CreatedTime')  
 
         $ExcelVar = $SmaResources.Databricks
-
-        $ExcelVar | 
-        ForEach-Object { [PSCustomObject]$_ } | Select-Object -Unique $Exc | 
-        Export-Excel -Path $File -WorksheetName 'Databricks' -AutoSize -MaxAutoSizeRows 100 -TableName $TableName -TableStyle $tableStyle -ConditionalText $condtxt -Style $Style
+        $data = $ExcelVar | ForEach-Object { [PSCustomObject]$_ } | Select-Object -Unique $Exc
+        if ($data -and @($data).Count -gt 0) {
+            $data | Export-Excel -Path $File -WorksheetName 'Databricks' -AutoSize -MaxAutoSizeRows 100 -TableName $TableName -TableStyle $tableStyle -ConditionalText $condtxt -Style $Style
+        }
     }
 }

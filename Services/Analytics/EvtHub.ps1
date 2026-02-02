@@ -1,4 +1,4 @@
-﻿param($SCPath, $Sub, $Resources, $Task ,$File, $SmaResources, $TableStyle, $Metrics)
+param($SCPath, $Sub, $Resources, $Task ,$File, $SmaResources, $TableStyle, $Metrics)
 
 if ($Task -eq 'Processing')
 {
@@ -61,10 +61,10 @@ else
         $Exc.Add('KafkaEnabled')
         $Exc.Add('CreatedTime')  
 
-        $ExcelVar = $SmaResources.EvtHub  
-
-        $ExcelVar | 
-        ForEach-Object { [PSCustomObject]$_ } | Select-Object -Unique $Exc | 
-        Export-Excel -Path $File -WorksheetName 'Event Hubs' -AutoSize -MaxAutoSizeRows 100 -TableName $TableName -TableStyle $tableStyle -ConditionalText $condtxt -Style $Style, $StyleCost
+        $ExcelVar = $SmaResources.EvtHub
+        $data = $ExcelVar | ForEach-Object { [PSCustomObject]$_ } | Select-Object -Unique $Exc
+        if ($data -and @($data).Count -gt 0) {
+            $data | Export-Excel -Path $File -WorksheetName 'Event Hubs' -AutoSize -MaxAutoSizeRows 100 -TableName $TableName -TableStyle $tableStyle -ConditionalText $condtxt -Style $Style, $StyleCost
+        }
     }
 }
