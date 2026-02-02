@@ -88,80 +88,6 @@ Function RunInventorySetup()
         }
     }
 
-    function CheckCliRequirements() 
-    {        
-        Write-Log -Message ('Verifying Azure CLI is installed...') -Severity 'Info'
-
-        $azCliVersion = az --version
-
-        Write-Log -Message ('CLI Version: {0}' -f $azCliVersion[0]) -Severity 'Success'
-    
-        if ($null -eq $azCliVersion) 
-        {
-            Read-Host "Azure CLI Not Found. Please install to and run the script again, press <Enter> to exit." -ForegroundColor Red
-            Exit
-        }
-
-        Write-Log -Message ('Verifying Azure CLI Extension...') -Severity 'Info'
-
-        $azCliExtension = az extension list --output json | ConvertFrom-Json
-        $azCliExtension = $azCliExtension | Where-Object {$_.name -eq 'resource-graph'}
-
-        Write-Log -Message ('Current Resource-Graph Extension Version: {0}' -f $azCliExtension.Version) -Severity 'Success'
-        
-        $azCliExtensionVersion = $azcliExt | Where-Object {$_.name -eq 'resource-graph'}
-    
-        if (!$azCliExtensionVersion) 
-        {
-            Write-Log -Message ('Azure CLI Extension not found') -Severity 'Warning'
-            Write-Log -Message ('Installing Azure CLI Extension...') -Severity 'Info'
-            az extension add --name resource-graph
-        }
-
-        Write-Log -Message ('Checking Azure PowerShell Module...') -Severity 'Info'
-
-        $VarAzPs = Get-InstalledModule -Name Az -ErrorAction silentlycontinue
-
-        Write-Log -Message ('Azure PowerShell Module Version: {0}.{1}.{2}' -f [string]$VarAzPs.Version.Major,  [string]$VarAzPs.Version.Minor, [string]$VarAzPs.Version.Build) -Severity 'Success'
-
-        IF($null -eq $VarAzPs)
-        {
-            Write-Log -Message ('Trying to install Azure PowerShell Module...') -Severity 'Warning'
-            Install-Module -Name Az -Repository PSGallery -Force
-        }
-
-        $VarAzPs = Get-InstalledModule -Name Az -ErrorAction silentlycontinue
-
-        if ($null -eq $VarAzPs) 
-        {
-            Write-Log -Message ('Admininstrator rights required to install Azure PowerShell Module. Press <Enter> to finish script') -Severity 'Error'
-            Read-Host ''
-            Exit
-        }
-        
-
-        Write-Log -Message ('Checking ImportExcel Module...') -Severity 'Info'
-    
-        $VarExcel = Get-InstalledModule -Name ImportExcel -ErrorAction silentlycontinue
-    
-        Write-Log -Message ('ImportExcel Module Version: {0}.{1}.{2}' -f [string]$VarExcel.Version.Major,  [string]$VarExcel.Version.Minor, [string]$VarExcel.Version.Build) -Severity 'Success'
-    
-        if ($null -eq $VarExcel) 
-        {
-            Write-Log -Message ('Trying to install ImportExcel Module...') -Severity 'Warning'
-            Install-Module -Name ImportExcel -Force
-        }
-    
-        $VarExcel = Get-InstalledModule -Name ImportExcel -ErrorAction silentlycontinue
-    
-        if ($null -eq $VarExcel) 
-        {
-            Write-Log -Message ('Admininstrator rights required to install ImportExcel Module. Press <Enter> to finish script') -Severity 'Error'
-            Read-Host ''
-            Exit
-        }
-    }
-    
     function CheckPowerShell() 
     {
         Write-Log -Message ('Checking PowerShell...') -Severity 'Info'
@@ -473,7 +399,6 @@ Function RunInventorySetup()
     }
 
     CheckVersion
-    CheckCliRequirements
     CheckPowerShell
     GetSubscriptionsData
     ResourceInventoryLoop
@@ -615,6 +540,11 @@ function ExecuteInventoryProcessing()
     function ProcessResourceResult()
     {
         Write-Log -Message ("Starting Reporting Phase.") -Severity 'Info'
+
+        # Ensure the Excel file exists so services and Summary can write to it (avoids missing file when no service has data)
+        if (-not (Test-Path -Path $file -PathType Leaf)) {
+            "" | Export-Excel -Path $file -WorksheetName 'Overview' -ErrorAction SilentlyContinue
+        }
 
         $Services = @()
 
@@ -831,23 +761,30 @@ if($SkipConsumption.IsPresent -or !$consumptionCreated)
     Out-File $Global:ConsumptionFileCsv
 }
 
-$jsonWildCard = $DefaultPath + "*.json"
+# Build list of existing files only (Compress-Archive fails if any path does not exist)
+$pathsToCompress = @()
+if (Test-Path -Path $Global:File -PathType Leaf) { $pathsToCompress += $Global:File }
+if (Test-Path -Path $Global:ConsumptionFileCsv -PathType Leaf) { $pathsToCompress += $Global:ConsumptionFileCsv }
+if (Test-Path -Path $Global:PowerShellTranscriptFile -PathType Leaf) { $pathsToCompress += $Global:PowerShellTranscriptFile }
+$jsonFiles = Get-ChildItem -Path ($DefaultPath + "*.json") -ErrorAction SilentlyContinue
+if ($jsonFiles) { $pathsToCompress += $jsonFiles.FullName }
 
-$compressionOutput = @{
-    Path = $Global:File, $Global:ConsumptionFileCsv, $Global:PowerShellTranscriptFile, $jsonWildCard
-    CompressionLevel = 'Fastest'
-    DestinationPath = $Global:ZipOutputFile
-}
-
-try 
+if ($pathsToCompress.Count -gt 0)
 {
-    Compress-Archive @compressionOutput
+    try
+    {
+        Compress-Archive -Path $pathsToCompress -CompressionLevel Fastest -DestinationPath $Global:ZipOutputFile
+    }
+    catch
+    {
+        $_ | Format-List -Force
+        Write-Error ("Error Compressing Output File: {0}." -f $Global:ZipOutputFile)
+        Write-Error ("Please zip the output files manually.")
+    }
 }
-catch 
+else
 {
-    $_ | Format-List -Force
-    Write-Error ("Error Compressing Output File: {0}." -f $Global:ZipOutputFile)
-    Write-Error ("Please zip the output files manually.")
+    Write-Log -Message ("No output files to compress; zip was not created.") -Severity 'Warning'
 }
 
 Write-Log -Message ("Execution Time: {0}" -f $Runtime) -Severity 'Success'
